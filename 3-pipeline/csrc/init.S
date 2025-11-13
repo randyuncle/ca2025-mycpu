@@ -2,6 +2,11 @@
 # MyCPU is freely redistributable under the MIT License. See the file
 # "LICENSE" for information on usage and redistribution of this file.
 
+# Stack configuration
+# Stack starts at 0x10000000 (256MB) and grows down
+# Minimum safe SP is 0x00200000 (2MB) to avoid .bss corruption at 0x00100000
+.equ STACK_LIMIT, 0x00200000
+
 .section .text.init
 .globl _start
 _start:
@@ -36,6 +41,11 @@ tran_handler:
 __trap_entry:
   csrw mscratch, sp
   addi sp, sp, -128
+
+  # Stack overflow protection: check if SP < STACK_LIMIT
+  li t0, STACK_LIMIT
+  bltu sp, t0, __stack_overflow_trap
+
   sw ra, 4(sp)
 
   sw gp, 12(sp)
@@ -43,7 +53,7 @@ __trap_entry:
   sw t0, 20(sp)
   sw t1, 24(sp)
   sw t2, 28(sp)
-  sw tp, 32(sp)
+  sw s0, 32(sp)
   sw s1, 36(sp)
   sw a0, 40(sp)
   sw a1, 44(sp)
@@ -79,7 +89,7 @@ __trap_entry:
   lw t0, 20(sp)
   lw t1, 24(sp)
   lw t2, 28(sp)
-  lw tp, 32(sp)
+  lw s0, 32(sp)
   lw s1, 36(sp)
   lw a0, 40(sp)
   lw a1, 44(sp)
@@ -105,3 +115,25 @@ __trap_entry:
   lw t6, 124(sp)
   csrr sp, mscratch
   mret
+
+# Stack overflow trap handler
+# Called when SP drops below STACK_LIMIT (0x00200000)
+# This indicates stack corruption risk - halt immediately
+__stack_overflow_trap:
+  # Restore SP from mscratch to prevent further corruption
+  csrr sp, mscratch
+
+  # Write diagnostic signature to known address for debugging
+  # 0xDEAD5ACF = "DEAD Stack OverFlow"
+  li t0, 0xDEAD5ACF
+  li t1, 0x00200000
+  sw t0, 0(t1)
+
+  # Trigger fatal exception by writing to invalid address
+  # This ensures the system halts rather than continuing with corrupted stack
+  li t0, 0xFFFFFFFF
+  sw zero, 0(t0)
+
+  # Infinite loop as final safety net
+__stack_overflow_halt:
+  j __stack_overflow_halt
