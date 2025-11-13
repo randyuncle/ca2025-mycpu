@@ -2,7 +2,8 @@
 
 ## Overview
 
-This project implements a minimal single-cycle RISC-V CPU designed specifically to execute `jit.asmbin`, a self-modifying code demonstration showcasing JIT compilation concepts.
+This project implements a minimal single-cycle RISC-V CPU designed specifically to execute `jit.asmbin`,
+a self-modifying code demonstration showcasing [JIT compilation](https://en.wikipedia.org/wiki/Just-in-time_compilation) concepts.
 The implementation includes only the 5 instructions required by this program, making it an excellent educational example of focused processor design.
 This approach demonstrates how processors can be optimized for specific workload requirements rather than implementing complete instruction sets.
 
@@ -15,7 +16,34 @@ The CPU supports exactly these RISC-V instructions:
 4. SW (Store Word) - word-aligned memory writes with full 32-bit strobes
 5. JALR (Jump and Link Register) - function calls, returns, and dynamic jump targets
 
-ECALL is not required for this minimal CPU since test verification reads registers directly via debug interface.
+ECALL is not required for this minimal CPU.
+The test infrastructure reads register values directly through a debug interface,
+eliminating the need for system call support or host communication mechanisms.
+
+## Architecture
+
+This is a single-cycle processor where each instruction completes in one clock cycle.
+The design organizes the datapath into five combinational stages that all execute within the same cycle:
+
+```
+┌──────────┐    ┌─────────┐    ┌─────────┐    ┌────────┐    ┌───────────┐
+│    IF    │───▶│   ID    │───▶│   EX    │───▶│  MEM   │───▶│    WB     │
+│  Fetch   │    │ Decode  │    │ Execute │    │ Access │    │ WriteBack │
+└──────────┘    └─────────┘    └─────────┘    └────────┘    └───────────┘
+     │               │               │             │              │
+     └───── PC ──────┴──── RegFile ──┴──── ALU ────┴──── Memory ──┘
+        (updates at cycle end)     (reads at cycle start, writes at end)
+```
+
+Unlike a pipelined processor where each stage spans one cycle and multiple instructions overlap, this single-cycle design completes all five stages combinationally before the next clock edge.
+The clock period must accommodate the longest instruction path (typically load: IF → ID → EX → MEM → WB).
+
+Key architectural features:
+- Addition-only ALU eliminates all subtraction, logic, and shift circuits
+- JALR path clears LSB (`target & ~1`) for proper alignment per RISC-V specification
+- WriteBack multiplexer selects between ALU result, memory data, or PC+4 based on instruction type
+- Unified memory serves both instruction fetch and data access (three concurrent read ports in implementation)
+- Register file reads occur combinationally; writes happen at clock edge
 
 ## Design Highlights
 
@@ -29,10 +57,16 @@ Memory operations support word-aligned access only, eliminating byte/halfword ex
 Load Word (LW) reads 32-bit values directly: `data ← mem[addr]`.
 Store Word (SW) writes with all byte strobes enabled: `mem[addr] ← data`.
 
+The memory subsystem uses SyncReadMem (synchronous block RAM) with one-cycle read latency.
+The test infrastructure divides the CPU clock by 4 to accommodate this latency, allowing signals to stabilize across multiple fast memory cycles before each CPU cycle.
+This approach simplifies the educational design while maintaining functional correctness for the JIT test program.
+Real hardware implementations would typically use separate instruction and data memories (Harvard architecture) to avoid multi-ported memory requirements.
+
 ### Minimal Decode Logic
-The instruction decoder handles only 6 opcodes, significantly reducing control complexity.
-Immediate extraction supports I-type, S-type, and U-type formats without B-type or J-type encoding.
-The design eliminates funct3/funct7 field decoding since all operations are uniquely determined by opcode.
+The instruction decoder handles only 5 opcodes (Load, OpImm, Store, Auipc, Jalr), significantly reducing control complexity.
+Immediate extraction supports three encoding formats: I-type (12-bit sign-extended), S-type (12-bit sign-extended split), and U-type (20-bit upper immediate).
+The design eliminates funct3/funct7 field decoding since all five operations are uniquely determined by opcode alone.
+B-type (branch) and J-type (jump) encodings are not required for this minimal instruction subset.
 
 ## Test Program: jit.asmbin
 
@@ -68,6 +102,13 @@ jit_instructions:
 This minimal example demonstrates the complete JIT cycle: encode → copy → execute.
 The pattern forms the foundation of modern JIT compilers including V8 (JavaScript), PyPy (Python), and LuaJIT (Lua).
 The 60-byte binary efficiently illustrates these concepts without requiring complex instruction set support.
+
+Real-world JIT implementations require additional considerations this minimal design intentionally omits:
+- Instruction cache coherency: CPUs typically require explicit cache invalidation (`fence.i`) after self-modifying code writes
+- `W^X` (Write XOR Execute) security policies: Modern systems prevent simultaneous write and execute permissions on memory pages
+- Branch prediction and BTB (Branch Target Buffer): Production CPUs optimize indirect jumps through JALR with prediction hardware
+
+This unified memory design executes modified code immediately without cache coherency concerns, simplifying the educational demonstration.
 
 ## Building and Testing
 
