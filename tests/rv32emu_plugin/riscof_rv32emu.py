@@ -61,6 +61,7 @@ class rv32emu(pluginTemplate):
         self.xlen = ('64' if 64 in ispec['supported_xlen'] else '32')
         self.isa = 'rv' + self.xlen
 
+        # Standard single-letter extensions
         if "I" in ispec["ISA"]:
             self.isa += 'i'
         if "M" in ispec["ISA"]:
@@ -73,6 +74,12 @@ class rv32emu(pluginTemplate):
             self.isa += 'd'
         if "C" in ispec["ISA"]:
             self.isa += 'c'
+
+        # Z-extensions (Zicsr, Zifencei, etc.)
+        if "Zicsr" in ispec["ISA"]:
+            self.isa += '_zicsr'
+        if "Zifencei" in ispec["ISA"]:
+            self.isa += '_zifencei'
 
         self.compile_cmd = self.compile_cmd + ' -mabi=' + ('lp64 ' if 64 in ispec['supported_xlen'] else 'ilp32 ') + f'-DXLEN={self.xlen} '
         logger.debug(f'Compile command template: {self.compile_cmd}')
@@ -87,7 +94,11 @@ class rv32emu(pluginTemplate):
             sig_file = os.path.join(test_dir, 'Reference-rv32emu.signature')
 
             # Compile test
-            compile_cmd = self.compile_cmd.format(testentry['isa'].lower(), test, elf, '')
+            # Force Zicsr extension since test harness uses CSR instructions
+            test_isa = testentry['isa'].lower()
+            if 'zicsr' not in test_isa and 'rv32' in test_isa:
+                test_isa += '_zicsr'
+            compile_cmd = self.compile_cmd.format(test_isa, test, elf, '')
 
             logger.debug('Compiling test: ' + compile_cmd)
             utils.shellCommand(compile_cmd).run(cwd=test_dir)

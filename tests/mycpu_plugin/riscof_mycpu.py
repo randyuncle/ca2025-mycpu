@@ -85,6 +85,10 @@ class mycpu(pluginTemplate):
 
     def runTests(self, testList):
         total_tests = len(testList)
+        logger.info(f'=== BATCH MODE: Preparing {total_tests} tests ===')
+
+        # Phase 1: Compile all tests and prepare .asmbin files
+        test_metadata = []
         test_num = 0
         for testname in testList:
             test_num += 1
@@ -92,13 +96,18 @@ class mycpu(pluginTemplate):
             test = testentry['test_path']
             test_dir = testentry['work_dir']
 
-            logger.info(f'Running test {test_num}/{total_tests}: {testname}')
+            logger.info(f'Compiling test {test_num}/{total_tests}: {testname}')
 
             elf = os.path.join(test_dir, 'dut.elf')
             sig_file = os.path.join(test_dir, 'DUT-mycpu.signature')
+            asmbin = os.path.join(test_dir, 'test.asmbin')
 
             # Compile test to ELF
-            compile_cmd = self.compile_cmd.format(testentry['isa'].lower(), test, elf, '')
+            # Force Zicsr extension since test harness uses CSR instructions
+            test_isa = testentry['isa'].lower()
+            if 'zicsr' not in test_isa and 'rv32' in test_isa:
+                test_isa += '_zicsr'
+            compile_cmd = self.compile_cmd.format(test_isa, test, elf, '')
 
             logger.debug('Compiling test: ' + compile_cmd)
             utils.shellCommand(compile_cmd).run(cwd=test_dir)
@@ -109,70 +118,102 @@ class mycpu(pluginTemplate):
                 continue
 
             # Convert ELF to asmbin format for MyCPU
-            asmbin = os.path.join(test_dir, 'test.asmbin')
             objcopy_cmd = f'{self.riscv_objcopy} -O binary {elf} {asmbin}'
             logger.debug('Converting to asmbin: ' + objcopy_cmd)
             utils.shellCommand(objcopy_cmd).run(cwd=test_dir)
 
-            # Run ChiselTest to execute CPU simulation
-            if self.target_run:
-                # Copy asmbin file to MyCPU resources
-                resource_dir = os.path.join(self.mycpu_project, 'src/main/resources')
-                os.makedirs(resource_dir, exist_ok=True)
-                shutil.copy(asmbin, os.path.join(resource_dir, 'test.asmbin'))
+            # Store metadata for batch testing
+            test_metadata.append({
+                'name': testname,
+                'elf': elf,
+                'sig_file': sig_file,
+                'asmbin': asmbin,
+                'test_dir': test_dir
+            })
 
-                # Generate test file
-                test_scala = self._generate_test_scala(testname, elf, sig_file, asmbin)
-                dest_path = os.path.join(self.mycpu_project, 'src/test/scala/riscv/compliance/ComplianceTest.scala')
-                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        if not self.target_run:
+            return
 
-                with open(dest_path, 'w') as f:
-                    f.write(test_scala)
+        # Phase 2: Generate batch test file with all tests
+        logger.info(f'=== Generating batch test file with {len(test_metadata)} tests ===')
+        batch_test_scala = self._generate_batch_test_scala(test_metadata)
+        dest_path = os.path.join(self.mycpu_project, 'src/test/scala/riscv/compliance/ComplianceTest.scala')
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
 
-                # Run sbt test in the MyCPU project with timeout and proper error handling
-                # Map directory name to SBT project name for multi-project build
-                project_dir_name = os.path.basename(self.mycpu_project)
-                project_map = {
-                    '1-single-cycle': 'singleCycle',
-                    '2-mmio-trap': 'mmioTrap',
-                    '3-pipeline': 'pipeline'
-                }
-                sbt_project_name = project_map.get(project_dir_name, 'singleCycle')
+        with open(dest_path, 'w') as f:
+            f.write(batch_test_scala)
 
-                # Run from parent directory with project selection (multi-project SBT structure)
-                parent_dir = os.path.dirname(self.mycpu_project)
-                log_file = os.path.join(test_dir, 'sbt_output.log')
-                # Disable SBT server completely via java system property to prevent boot lock conflicts
-                # Combined with isolated sbt.global.base for complete test isolation
-                # Create unique SBT base to avoid rt.jar file conflicts between parallel tests
-                # Increased timeout to 300s for complex tests like misalign1-jalr-01.S
-                sbt_global_base = os.path.join(test_dir, '.sbt-global')
-                # Use SBT_OPTS to pass -Dsbt.server.forcestart=false (disable server mode entirely)
-                execute = f'cd {parent_dir} && SBT_OPTS="-Dsbt.server.forcestart=false" timeout 300 sbt -Dsbt.global.base={sbt_global_base} --batch "project {sbt_project_name}" "testOnly riscv.compliance.ComplianceTest" > {log_file} 2>&1'
-                logger.debug(f'Running test: {execute}')
+        # Phase 3: Run all tests in single SBT invocation
+        logger.info(f'=== Running all {len(test_metadata)} tests in single SBT session ===')
+        project_dir_name = os.path.basename(self.mycpu_project)
+        project_map = {
+            '1-single-cycle': 'singleCycle',
+            '2-mmio-trap': 'mmioTrap',
+            '3-pipeline': 'pipeline'
+        }
+        sbt_project_name = project_map.get(project_dir_name, 'singleCycle')
+        parent_dir = os.path.dirname(self.mycpu_project)
 
-                try:
-                    utils.shellCommand(execute).run()
+        # Batch log file
+        batch_log = os.path.join(self.work_dir, 'batch_test.log')
 
-                    if os.path.exists(sig_file):
-                        logger.info(f'Signature generated: {sig_file}')
-                    else:
-                        logger.warning(f'Signature file not created: {sig_file}')
-                        if os.path.exists(log_file):
-                            with open(log_file, 'r') as f:
-                                error_log = f.read()
-                                if 'error' in error_log.lower() or 'failed' in error_log.lower():
-                                    logger.error(f'Test execution errors detected. See {log_file} for details.')
-                        # Create empty signature to allow RISCOF to continue
-                        with open(sig_file, 'w') as f:
-                            for i in range(256):
-                                f.write('00000000\n')
-                except Exception as e:
-                    logger.error(f'Test execution failed: {e}')
-                    if os.path.exists(log_file):
-                        logger.error(f'See {log_file} for detailed error output')
+        # Run all tests with real-time progress feedback
+        cmd = f'cd {parent_dir} && timeout 3600 sbt --batch "project {sbt_project_name}" "testOnly riscv.compliance.ComplianceTest" 2>&1'
+        logger.debug(f'Running batch test: {cmd}')
+
+        try:
+            import re
+            test_counter = 0
+
+            # Stream SBT output with progress indicators
+            proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+            with open(batch_log, 'w') as log_file:
+                for line in proc.stdout:
+                    log_file.write(line)  # Save to log
+
+                    # Detect test execution and show progress
+                    # Match ScalaTest output: "- should pass test <testname>"
+                    test_match = re.search(r'should pass test (.+?)[\s\*]', line)
+                    if test_match:
+                        test_counter += 1
+                        test_name = test_match.group(1)
+                        logger.info(f'[{test_counter}/{len(test_metadata)}] Running: {test_name}')
+
+                    # Show compilation progress
+                    if '[info] Compiling' in line:
+                        logger.info('Compiling test suite...')
+
+                    # Show errors immediately
+                    if '[error]' in line or 'FAILED' in line:
+                        logger.warning(line.strip())
+
+            proc.wait()
+            logger.info(f'Batch test completed. Full log: {batch_log}')
+
+            # Verify signatures were generated
+            success_count = 0
+            fail_count = 0
+            for meta in test_metadata:
+                if os.path.exists(meta['sig_file']):
+                    success_count += 1
+                else:
+                    fail_count += 1
+                    logger.warning(f"Signature not created: {meta['name']}")
                     # Create empty signature to allow RISCOF to continue
-                    with open(sig_file, 'w') as f:
+                    with open(meta['sig_file'], 'w') as f:
+                        for i in range(256):
+                            f.write('00000000\n')
+
+            logger.info(f'Results: {success_count} passed, {fail_count} failed')
+
+        except Exception as e:
+            logger.error(f'Batch test execution failed: {e}')
+            logger.error(f'See {batch_log} for detailed error output')
+            # Create empty signatures for all missing files
+            for meta in test_metadata:
+                if not os.path.exists(meta['sig_file']):
+                    with open(meta['sig_file'], 'w') as f:
                         for i in range(256):
                             f.write('00000000\n')
 
@@ -196,5 +237,45 @@ class ComplianceTest extends ComplianceTestBase {{
       TestAnnotations.annos
     )
   }}
+}}
+'''
+
+    def _generate_batch_test_scala(self, test_metadata):
+        """Generate Scala test file with all compliance tests in batch mode"""
+
+        # Copy all .asmbin files to resources directory with unique names
+        resource_dir = os.path.join(self.mycpu_project, 'src/main/resources')
+        os.makedirs(resource_dir, exist_ok=True)
+
+        # Generate test cases for all tests
+        test_cases = []
+        for idx, meta in enumerate(test_metadata):
+            # Copy asmbin with unique name
+            asmbin_name = f"test_{idx:03d}.asmbin"
+            shutil.copy(meta['asmbin'], os.path.join(resource_dir, asmbin_name))
+
+            # Generate test case
+            test_case = f'''  it should "pass test {meta['name']}" in {{
+    runComplianceTest(
+      "{asmbin_name}",
+      "{meta['elf']}",
+      "{meta['sig_file']}",
+      TestAnnotations.annos
+    )
+  }}'''
+            test_cases.append(test_case)
+
+        # Combine all test cases into single Scala file
+        test_cases_str = '\n\n'.join(test_cases)
+
+        return f'''// Auto-generated batch compliance test
+package riscv.compliance
+
+import riscv.TestAnnotations
+
+class ComplianceTest extends ComplianceTestBase {{
+  behavior.of("MyCPU Compliance")
+
+{test_cases_str}
 }}
 '''
