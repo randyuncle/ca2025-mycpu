@@ -170,31 +170,58 @@ class Control extends Module {
   // detection logic implemented above
   //
   // Q1: Why do we need to stall for load-use hazards?
-  // A: [Student answer here]
+  // A: Load-use hazards occur when an instruction tries to use a register whose 
+  // value is being loaded by a previous instruction but has not yet been written 
+  // back, or precisely, been written in MEM/WB pipeline register for forwarding. 
+  // Specifically, this happens when the target destination register address of a 
+  // instruction is still in the MEM stage while the following instruction intends 
+  // to immediately load the same register address at EX stage. Therefore, the 
+  // pipeline must be stalled to ensure that the data in the target register address 
+  // is properly updated. Otherwise, the instruction may reach the EX stage with 
+  // incorrect operands and produce an unexpected result.
   // Hint: Consider data dependency and forwarding limitations
   //
   // Q2: What is the difference between "stall" and "flush" operations?
-  // A: [Student answer here]
+  // A: The stall operation is used for data hazards, freezing the PC update in 
+  // Instruction Fetch stage, and also injecting NOP instruction into pipeline 
+  // register, especially in IF2ID pipeline register. On the other hand, the flush 
+  // operation is triggered with both control hazards and data hazards. It wouldn't 
+  // affect the process in PC update; instead, it clears the content in pipeline 
+  // registers IF2ID and ID2EX while they facing with data hazards and control hazards, 
+  // respectively, and replaces them with the NOP operation to avoid from processing 
+  // wrong instructions. 
   // Hint: Compare their effects on pipeline registers and PC
   //
   // Q3: Why does jump instruction with register dependency need stall?
-  // A: [Student answer here]
+  // A: The target address calculation of jump instructions is performed at 
+  // Instruction Decode stage; thus, we must stall the operation if the current instruction 
+  // pipeline occurs data hazards, holding the fetch result (at IF2ID) and also waiting for 
+  // the data the loaded register address to be updated. 
   // Hint: When is jump target address available?
   //
   // Q4: In this design, why is branch penalty only 1 cycle instead of 2?
-  // A: [Student answer here]
+  // A: Since the target address of branch instructions is resolved in ID stage, different 
+  // from EX stage calculation that requires 2 cycles flush (flushes ID also) to wait for the
+  // target register address to be updated, we only need to flush the result from the IF2ID
+  // pipeline register and wait for 1 cycle for further forwarding (what Exercise 18 does) to
+  // resolve it. 
   // Hint: Compare ID-stage vs EX-stage branch resolution
   //
   // Q5: What would happen if we removed the hazard detection logic entirely?
-  // A: [Student answer here]
+  // A: Without the hazard detection in the CPU, the intructions would read the wrong data 
+  // from the target register address, leading to unexpected result. 
   // Hint: Consider data hazards and control flow correctness
   //
   // Q6: Complete the stall condition summary:
   // Stall is needed when:
-  // 1. ? (EX stage condition)
-  // 2. ? (MEM stage condition)
+  // 1. There exists either jump instruction in ID or load instruction in MEM, and the 
+  //    destination register address in EX stage matches the source register address in ID 
+  //    stage where the former isn't x0. (EX stage condition)
+  // 2. There is a jump instruction in ID as well as a load instruction in MEM, and the 
+  //    source register address in the former depends on the destination register address of 
+  //    the latter which isn't x0. (MEM stage condition)
   //
   // Flush is needed when:
-  // 1. ? (Branch/Jump condition)
+  // 1. The instruction in the ID stage is a branch or jump type instruction. (Branch/Jump condition)
   //
 }
