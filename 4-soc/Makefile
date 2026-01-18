@@ -37,13 +37,13 @@ sim: verilator
 	cd verilog/verilator/obj_dir && ./VTop -i ../../../$(BINARY)
 
 check-vga: verilator
-	@echo "🔄 Building nyancat binary..."
-	@$(MAKE) -C csrc nyancat.asmbin >/dev/null
-	@echo "🖥️  Running VGA test (nyancat)..."
+	@echo "🔄 Building vga binary..."
+	@$(MAKE) -C csrc vga.asmbin >/dev/null
+	@echo "🖥️  Running VGA test (vga)..."
 	@echo "   - Press ESC or close window to exit"
 	@echo "   - VGA output: 640×480 @ 72Hz"
 	@echo ""
-	cd verilog/verilator/obj_dir && ./VTop -i ../../../csrc/nyancat.asmbin
+	cd verilog/verilator/obj_dir && ./VTop -vcd ../../../dump.vcd -i  ../../../csrc/vga.asmbin
 	@echo ""
 	@echo "✅ VGA test complete!"
 
