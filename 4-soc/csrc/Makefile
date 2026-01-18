@@ -4,7 +4,7 @@ CROSS_COMPILE ?= $(RISCV)/bin/riscv-none-elf-
 ASFLAGS = -march=rv32i_zicsr -mabi=ilp32
 # Optimization required: -O2 produces large stack frames that overflow in deep call chains
 # RV32I lacks hardware multiply/divide, so -O2 significantly reduces code size
-CFLAGS = -O2 -Wall -fno-builtin -march=rv32i_zicsr -mabi=ilp32
+CFLAGS = -O2 -Wall -fno-builtin -march=rv32im_zicsr -mabi=ilp32
 LDFLAGS = --oformat=elf32-littleriscv
 
 AS := $(CROSS_COMPILE)as
@@ -13,7 +13,7 @@ LD := $(CROSS_COMPILE)ld
 OBJCOPY := $(CROSS_COMPILE)objcopy
 
 # Program targets (add new programs here)
-PROGRAMS := nyancat uart shell
+PROGRAMS := nyancat uart shell vga
 BINARIES := $(PROGRAMS:%=%.asmbin)
 
 %.asmbin: %.elf
@@ -33,6 +33,21 @@ uart.asmbin: uart.c mmio.h init.o link.lds
 	$(CC) $(CFLAGS) -c -o uart.o uart.c
 	$(CROSS_COMPILE)ld -o uart.elf -T link.lds $(LDFLAGS) uart.o init.o
 	$(OBJCOPY) -O binary -j .text -j .data uart.elf $@
+
+s3d.o: s3d.c s3d.h math-sup.h
+	$(CC) $(CFLAGS) -g -c -o s3d.o s3d.c
+
+# The VGA validation program
+vga.asmbin: vga.c b3d-assets.h s3d.o s3d.h math-sup.h init.o link.lds
+	$(CC) $(CFLAGS) -c -o vga.o vga.c
+	$(CROSS_COMPILE)ld -o vga.elf -T link.lds $(LDFLAGS) vga.o init.o s3d.o
+	$(OBJCOPY) -O binary -j .text -j .data vga.elf $@
+
+# The another version of VGA validation program
+# vga.asmbin: simple-render.c b3d-assets.h math-sup.h init.o link.lds
+# 	$(CC) $(CFLAGS) -c -o vga.o simple-render.c
+# 	$(CROSS_COMPILE)ld -o vga.elf -T link.lds $(LDFLAGS) vga.o init.o
+# 	$(OBJCOPY) -O binary -j .text -j .data vga.elf $@
 
 shell.asmbin: shell.c mmio.h init.o link.lds
 	$(CC) $(CFLAGS) -c -o shell.o shell.c
