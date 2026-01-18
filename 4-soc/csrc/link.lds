@@ -10,6 +10,12 @@ SECTIONS
     *(.rodata*)
     *(.srodata*)
   }
+  /* The memory space to save the assets data in b3d */
+  .assets ALIGN(16) : {
+    __assets_start = .;
+    KEEP(*(.assets))
+    __assets_end = .;
+  }
   .sdata : {
     __sdata_start = .;
     PROVIDE(__global_pointer$ = . + 0x800);

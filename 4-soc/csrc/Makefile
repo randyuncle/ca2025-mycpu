@@ -1,4 +1,5 @@
-CROSS_COMPILE ?= $(HOME)/rv/toolchain/bin/riscv-none-elf-
+#CROSS_COMPILE ?= $(HOME)/rv/toolchain/bin/riscv-none-elf-
+CROSS_COMPILE ?= $(RISCV)/bin/riscv-none-elf-
 
 ASFLAGS = -march=rv32i_zicsr -mabi=ilp32
 # Optimization required: -O2 produces large stack frames that overflow in deep call chains
@@ -53,6 +54,15 @@ ifeq ($(NYANCAT_COMPRESSION_DELTA),1)
 else
 	python3 $< --output $@
 endif
+
+# Generate 3D asset data from .obj files
+b3d_assets.h: ../../scripts/gen_assets_data.py assets/*.obj
+	python3 $< header -i assets/*.obj -o $@
+
+test_linker.asm: test_linker.c b3d-assets.h init.o link.lds
+	$(CC) $(CFLAGS) -c -o test_linker.o test_linker.c
+	$(CROSS_COMPILE)ld -o test_linker.elf -T link.lds $(LDFLAGS) test_linker.o init.o
+	$(OBJCOPY) -O binary -j .text -j .data test_linker.elf $@
 
 # Nyancat build depends on generated data
 nyancat.o: nyancat.c nyancat-data.h
